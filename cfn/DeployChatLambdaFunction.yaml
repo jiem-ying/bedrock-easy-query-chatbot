@@ -1,0 +1,135 @@
+Parameters:
+  AgentID:
+    Type: String
+    Description: The Bedrock AgentID
+    Default: 'SOXFBBHHCY'
+  AgentAliasID:
+    Type: String
+    Description: The Bedrock AgentAliasID
+    Default: 'BJZDAAYJMA'
+  LambdaLayerS3BucketName:
+    Type: String
+    Description: The S3 bucket stores lambda layer code
+    Default: 'bedrock-kb-easyquery-us-west-2-126672810070'
+
+Resources:
+  LambdaExecutionRoleForKnowledgeBase:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: BedrockExecutionPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'bedrock:*'
+                Resource: '*'
+
+  DeployKnowledgeBaseLambdaLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: KnowledgeBaseLambdaLayer
+      Description: Knowledge Base Lambda Layer
+      Content:
+        S3Bucket: !Ref LambdaLayerS3BucketName
+        S3Key: layers/knowledgebase_lambdalayer.zip
+      CompatibleRuntimes:
+        - python3.12
+        - python3.11
+        - python3.10
+
+  DeployKnowledgeBaseLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: InvokeEasyQueryAgent
+      Code:
+        ZipFile: |
+            import json
+            import boto3
+            import os
+            
+            def lambda_handler(event, body):
+                # Extract the question from the event
+                question = event['question']
+                # question = 'How many Lambda functions I have in my AWS account?'
+            
+                # Initialize the Bedrock Runtime client
+                bedrock_runtime = boto3.client('bedrock-agent-runtime')
+            
+                # Specify your Bedrock agent ID and Alias
+                agent_id = os.environ.get("AGENT_ID")
+                sessionId = event["sessionId"]
+                agent_alias_id = os.environ.get("AGENT_ALIAS_ID")
+            
+                # Prepare the request body for the agent
+                request_body = {
+                    "inputText": question,
+                    "enableTrace": False  # Set to True if you want to enable tracing
+                }
+            
+                try:
+                    # Invoke the Bedrock agent
+                    response = bedrock_runtime.invoke_agent(
+                        agentId=agent_id,
+                        agentAliasId= agent_alias_id,  # You can specify a specific alias if needed
+                        sessionId= sessionId,  # Optional: Provide a session ID if you want to maintain context
+                        inputText=json.dumps(request_body)
+                    )
+                    sessionId = response['sessionId']
+                    # Process the EventStream
+                    full_response = ""
+                    citations = []
+            
+                    for event in response['completion']:
+                        if 'chunk' in event:
+                            chunk = event['chunk']
+                            if 'bytes' in chunk:
+                                full_response += chunk['bytes'].decode('utf-8')
+                            if 'attribution' in chunk:
+                                attribution = chunk['attribution']
+                                if 'citations' in attribution:
+                                    citations.extend(attribution['citations'])
+                    # Prepare the result
+            
+                    return {
+                        'statusCode': 200,
+                        'body': {
+                            "question": question.strip(),
+                            "answer": full_response.strip(), 
+                            "sessionId":sessionId, 
+                            "citations":citations
+                        }
+                    }
+            
+                except Exception as e:
+                    print(f"Error: {str(e)}")
+                    return {
+                        'statusCode': 500,
+                        'body': json.dumps({"error": str(e)})
+                    }
+              
+      Description: Create KnowledgeBase Lambda
+      Handler: index.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt LambdaExecutionRoleForKnowledgeBase.Arn
+      Runtime: python3.12
+      Timeout: 60
+      Layers: 
+        - !Ref DeployKnowledgeBaseLambdaLayer
+      Environment:
+        Variables:
+          AGENT_ID: !Ref AgentID
+          AGENT_ALIAS_ID: !Ref AgentAliasID
