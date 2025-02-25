@@ -56,20 +56,6 @@ aws configure
 
     S3 bucket creation and data upload
 
-## Project Structure
-```
-bedrock-easy-query-chatbot/
-├── notebooks/
-│   └── main.ipynb         # Main implementation notebook
-├── src/
-│   ├── lambda_function.py # Lambda function code
-│   └── utils.py          # Utility functions
-├── config/
-│   └── config.yaml       # Configuration files
-├── requirements.txt      # Python dependencies
-└── README.md            # Project documentation
-```
-
 ## Usage
 1. Open the Jupyter notebook in notebooks/main.ipynb
 
